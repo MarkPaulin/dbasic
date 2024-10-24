@@ -1,0 +1,34 @@
+# `coverage` configurations
+[tool.coverage.run]
+source = [
+    "./hooks",
+    "./{{ cookiecutter.repo_name }}/src"
+]
+omit = [
+    "./{{ cookiecutter.repo_name }}/src/{{ cookiecutter.repo_name.lower().replace(' ', '_').replace('-', '_') }}/run_pipeline.py"
+]
+
+[tool.coverage.omit]
+
+[tool.coverage.report]
+exclude_lines = [
+    "if __name__ == .__main__.:"
+]
+
+# `isort` configurations
+[tool.isort]
+profile = "black"
+
+# `pytest` configurations
+[tool.pytest.ini_options]
+addopts = [
+    "-vv",
+    "--doctest-modules",
+    "--ignore='./docs/'",
+    "--ignore='./example/'",
+    "--ignore='./{{ cookiecutter.repo_name }}/docs/'"
+]
+doctest_optionflags = "NORMALIZE_WHITESPACE"
+testpaths = [
+    "./tests"
+]
