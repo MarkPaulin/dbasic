@@ -1,6 +1,6 @@
 import sys
 from enum import Enum, auto
-from typing import Optional
+from typing import List, Optional
 
 ID_SIZE = 4
 USERNAME_SIZE = 32
@@ -34,7 +34,28 @@ class Row:
 class Table:
     def __init__(self, n_rows: int = 0):
         self.n_rows = n_rows
-        self.pages = [None for _ in range(TABLE_MAX_PAGES)]
+        self.pages: List[bytearray] = []
+
+    def row_slot(self, row_num: int) -> tuple[int, int]:
+        page_num = row_num // ROWS_PER_PAGE
+        row_offset = row_num % ROWS_PER_PAGE
+        byte_offset = row_offset * ROW_SIZE
+        return page_num, byte_offset
+
+    def write_row(self, row_num: int, row: Row) -> None:
+        ser = serialise_row(row)
+        page_num, byte_offset = self.row_slot(row_num)
+        if len(self.pages) <= page_num:
+            for _ in range(page_num + 1 - len(self.pages)):
+                self.pages.append(bytearray(PAGE_SIZE))
+        self.pages[page_num][byte_offset : (byte_offset + ROW_SIZE)] = ser
+
+    def read_row(self, row_num: int) -> Row:
+        page_num, byte_offset = self.row_slot(row_num)
+        row = deserialise_row(
+            self.pages[page_num][byte_offset : (byte_offset + ROW_SIZE)]
+        )
+        return row
 
 
 def serialise_row(row: Row) -> bytearray:
@@ -54,16 +75,6 @@ def deserialise_row(serialised: bytearray) -> Row:
     username = serialised[USERNAME_OFFSET:EMAIL_OFFSET].rstrip(b"\x00").decode()
     email = serialised[EMAIL_OFFSET:ROW_SIZE].rstrip(b"\x00").decode()
     return Row(id=id, username=username, email=email)
-
-
-def row_slot(table: Table, row_num: int) -> tuple[int, int]:
-    page_num = row_num // ROWS_PER_PAGE
-    page = table.pages[page_num]
-    if page is None:
-        table.pages[page_num] = bytearray(PAGE_SIZE)
-    row_offset = row_num % ROWS_PER_PAGE
-    byte_offset = row_offset * ROW_SIZE
-    return page_num, byte_offset
 
 
 class MetaCommandResult(Enum):
@@ -126,15 +137,14 @@ def execute_insert_statement(statement: Statement, table: Table) -> ExecuteResul
         return ExecuteResult.TableFull
 
     row = statement.row_to_insert
-    page_num, byte_offset = row_slot(table, table.n_rows)
-    table.pages[page_num][byte_offset : (byte_offset + ROW_SIZE)] = serialise_row(row)
+    table.write_row(table.n_rows, row)
     table.n_rows += 1
     return ExecuteResult.Success
 
 
 def execute_select_statement(statement: Statement, table: Table) -> ExecuteResult:
     for i in range(table.n_rows):
-        page_num, byte_offset = row_slot(table, i)
+        page_num, byte_offset = table.row_slot(i)
         row = deserialise_row(
             table.pages[page_num][byte_offset : (byte_offset + ROW_SIZE)]
         )
