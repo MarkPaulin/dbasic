@@ -86,6 +86,8 @@ class PrepareResult(Enum):
     Success = auto()
     UnrecognisedStatement = auto()
     SyntaxError = auto()
+    StringTooLong = auto()
+    NegativeId = auto()
 
 
 class StatementType(Enum):
@@ -116,16 +118,25 @@ def read_input() -> str:
     return input()
 
 
+def prepare_insert_statement(_input: str, statement: Statement) -> PrepareResult:
+    statement._type = StatementType.Insert
+    input_split = _input.split()
+    if len(input_split) < 4:
+        return PrepareResult.SyntaxError
+    id = int(input_split[1])
+    username = input_split[2]
+    email = input_split[3]
+    if len(username) > USERNAME_SIZE or len(email) > EMAIL_SIZE:
+        return PrepareResult.StringTooLong
+    if id < 0:
+        return PrepareResult.NegativeId
+    statement.row_to_insert = Row(id, username, email)
+    return PrepareResult.Success
+
+
 def prepare_statement(_input: str, statement: Statement) -> PrepareResult:
     if _input[:6] == "insert":
-        statement._type = StatementType.Insert
-        input_split = _input.split()
-        if len(input_split) < 4:
-            return PrepareResult.SyntaxError
-        statement.row_to_insert = Row(
-            int(input_split[1]), input_split[2], input_split[3]
-        )
-        return PrepareResult.Success
+        return prepare_insert_statement(_input, statement)
     if _input == "select":
         statement._type = StatementType.Select
         return PrepareResult.Success
@@ -191,6 +202,12 @@ def main():  # noqa: C901
             continue
         elif res == PrepareResult.UnrecognisedStatement:
             print(f"unrecognised keyword at start of '{_input}'")
+            continue
+        elif res == PrepareResult.StringTooLong:
+            print("string is too long")
+            continue
+        elif res == PrepareResult.NegativeId:
+            print("id must be positive")
             continue
 
         res = execute_statement(statement, table)
