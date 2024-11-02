@@ -1,5 +1,69 @@
 import sys
 from enum import Enum, auto
+from typing import Optional
+
+ID_SIZE = 4
+USERNAME_SIZE = 32
+EMAIL_SIZE = 220
+ID_OFFSET = 0
+USERNAME_OFFSET = ID_OFFSET + ID_SIZE
+EMAIL_OFFSET = USERNAME_OFFSET + USERNAME_SIZE
+ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE
+
+PAGE_SIZE = 4096
+TABLE_MAX_PAGES = 100
+ROWS_PER_PAGE = PAGE_SIZE // ROW_SIZE
+TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES
+
+
+class Row:
+    def __init__(
+        self,
+        id: Optional[int] = None,
+        username: Optional[str] = None,
+        email: Optional[str] = None,
+    ):
+        self.id = id
+        self.username = username
+        self.email = email
+
+    def __str__(self):
+        return f"({self.id}, {self.username}, {self.email})"
+
+
+class Table:
+    def __init__(self, n_rows: int = 0):
+        self.n_rows = n_rows
+        self.pages = [None for _ in range(TABLE_MAX_PAGES)]
+
+
+def serialise_row(row: Row) -> bytearray:
+    row_ser = bytearray(ROW_SIZE)
+    if row.id is None or row.username is None or row.email is None:
+        return row_ser
+    row_ser[ID_OFFSET:USERNAME_OFFSET] = row.id.to_bytes(ID_SIZE, byteorder="big")[
+        :ID_SIZE
+    ]
+    row_ser[USERNAME_OFFSET:EMAIL_OFFSET] = row.username.encode()[:USERNAME_SIZE]
+    row_ser[EMAIL_OFFSET:] = row.email.encode()[:EMAIL_SIZE]
+    return row_ser
+
+
+def deserialise_row(serialised: bytearray) -> Row:
+    id = int.from_bytes(serialised[ID_OFFSET:USERNAME_OFFSET], byteorder="big")
+    username = serialised[USERNAME_OFFSET:EMAIL_OFFSET].rstrip(b"\x00").decode()
+    email = serialised[EMAIL_OFFSET:ROW_SIZE].rstrip(b"\x00").decode()
+    return Row(id=id, username=username, email=email)
+
+
+def row_slot(table: Table, row_num: int) -> tuple[int, int]:
+    page_num = row_num // ROWS_PER_PAGE
+    page = table.pages[page_num]
+    if page is None:
+        table.pages[page_num] = bytearray(PAGE_SIZE)
+    row_offset = row_num % ROWS_PER_PAGE
+    byte_offset = row_offset * ROW_SIZE
+    return page_num, byte_offset
 
 
 class MetaCommandResult(Enum):
@@ -10,6 +74,7 @@ class MetaCommandResult(Enum):
 class PrepareResult(Enum):
     Success = auto()
     UnrecognisedStatement = auto()
+    SyntaxError = auto()
 
 
 class StatementType(Enum):
@@ -18,9 +83,18 @@ class StatementType(Enum):
     Select = auto()
 
 
+class ExecuteResult(Enum):
+    Success = auto()
+    TableFull = auto()
+    Other = auto()
+
+
 class Statement:
-    def __init__(self, _type: StatementType = StatementType.NoType):
+    def __init__(
+        self, _type: StatementType = StatementType.NoType, row_to_insert: Row = Row()
+    ):
         self._type = _type
+        self.row_to_insert = row_to_insert
 
 
 def print_prompt() -> None:
@@ -34,6 +108,12 @@ def read_input() -> str:
 def prepare_statement(_input: str, statement: Statement) -> PrepareResult:
     if _input[:6] == "insert":
         statement._type = StatementType.Insert
+        input_split = _input.split()
+        if len(input_split) < 4:
+            return PrepareResult.SyntaxError
+        statement.row_to_insert = Row(
+            int(input_split[1]), input_split[2], input_split[3]
+        )
         return PrepareResult.Success
     if _input == "select":
         statement._type = StatementType.Select
@@ -41,11 +121,33 @@ def prepare_statement(_input: str, statement: Statement) -> PrepareResult:
     return PrepareResult.UnrecognisedStatement
 
 
-def execute_statement(statement: Statement):
+def execute_insert_statement(statement: Statement, table: Table) -> ExecuteResult:
+    if table.n_rows == TABLE_MAX_ROWS:
+        return ExecuteResult.TableFull
+
+    row = statement.row_to_insert
+    page_num, byte_offset = row_slot(table, table.n_rows)
+    table.pages[page_num][byte_offset : (byte_offset + ROW_SIZE)] = serialise_row(row)
+    table.n_rows += 1
+    return ExecuteResult.Success
+
+
+def execute_select_statement(statement: Statement, table: Table) -> ExecuteResult:
+    for i in range(table.n_rows):
+        page_num, byte_offset = row_slot(table, i)
+        row = deserialise_row(
+            table.pages[page_num][byte_offset : (byte_offset + ROW_SIZE)]
+        )
+        print(row)
+    return ExecuteResult.Success
+
+
+def execute_statement(statement: Statement, table: Table) -> ExecuteResult:
     if statement._type == StatementType.Insert:
-        print("this is where insert will go")
+        return execute_insert_statement(statement, table)
     if statement._type == StatementType.Select:
-        print("this is where select will go")
+        return execute_select_statement(statement, table)
+    return ExecuteResult.Other
 
 
 def do_meta_command(_input: str) -> MetaCommandResult:
@@ -56,7 +158,8 @@ def do_meta_command(_input: str) -> MetaCommandResult:
         return MetaCommandResult.UnrecognisedCommand
 
 
-def main():
+def main():  # noqa: C901
+    table = Table()
     while True:
         print_prompt()
         _input = read_input()
@@ -73,12 +176,18 @@ def main():
         res = prepare_statement(_input, statement)
         if res == PrepareResult.Success:
             pass
+        elif res == PrepareResult.SyntaxError:
+            print("syntax error. could not parse statement")
+            continue
         elif res == PrepareResult.UnrecognisedStatement:
             print(f"unrecognised keyword at start of '{_input}'")
             continue
 
-        execute_statement(statement)
-        print("executed")
+        res = execute_statement(statement, table)
+        if res == ExecuteResult.Success:
+            print("executed")
+        elif res == ExecuteResult.TableFull:
+            print("error: table full")
 
 
 if __name__ == "__main__":
